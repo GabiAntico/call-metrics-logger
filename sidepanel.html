@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Call Metrics</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+<main class="panel-shell">
+    <section id="authPanel" class="panel-section auth-section" aria-labelledby="authTitle">
+        <div class="section-title">
+            <h2 id="authTitle">Ingresar</h2>
+        </div>
+        <form id="loginForm" class="login-form">
+            <div class="lock-field">
+                <label for="loginEmail">Email</label>
+                <input id="loginEmail" type="email" autocomplete="email" placeholder="tu@email.com" required />
+            </div>
+            <div class="lock-field">
+                <label for="loginPassword">Contraseña</label>
+                <input id="loginPassword" type="password" autocomplete="current-password" placeholder="Contraseña" required />
+            </div>
+            <button type="submit" id="loginBtn" class="primary-button">Ingresar</button>
+        </form>
+    </section>
+
+    <section id="sessionBar" class="session-bar is-hidden" aria-label="Sesión activa">
+        <div>
+            <span>Sesión</span>
+            <strong id="sessionEmail"></strong>
+        </div>
+        <button type="button" id="logoutBtn" class="text-button">Salir</button>
+    </section>
+
+    <div id="appContent" class="app-content is-hidden">
+    <header class="panel-header">
+        <div>
+            <p class="app-kicker">Call Metrics</p>
+            <h1>Registro de llamada</h1>
+        </div>
+        <dl class="daily-totals" aria-label="Métricas del día">
+            <div>
+                <dt>Llamadas</dt>
+                <dd id="totalCalls">0</dd>
+            </div>
+            <div>
+                <dt>Visitas</dt>
+                <dd id="technicalVisits">0</dd>
+            </div>
+        </dl>
+    </header>
+
+    <section class="panel-section" aria-labelledby="clientDataTitle">
+        <div class="section-title">
+            <h2 id="clientDataTitle">Datos del cliente</h2>
+        </div>
+
+        <div class="lock-field">
+            <label for="customerName">Nombre y apellido</label>
+            <div class="input-action-row">
+                <input id="customerName" type="text" autocomplete="off" placeholder="Nombre y apellido del cliente" />
+                <button type="button" class="lock-button" data-lock-target="customerName">Confirmar</button>
+            </div>
+        </div>
+
+        <div class="two-column">
+            <div class="lock-field">
+                <label for="clientNumber">Nro. cliente</label>
+                <div class="input-action-row compact">
+                    <input id="clientNumber" type="text" inputmode="numeric" autocomplete="off" placeholder="Nro. cliente" />
+                    <button type="button" class="lock-button" data-lock-target="clientNumber">Confirmar</button>
+                </div>
+            </div>
+
+            <div class="lock-field">
+                <label for="customerDni">DNI</label>
+                <div class="input-action-row compact">
+                    <input id="customerDni" type="text" inputmode="numeric" autocomplete="off" placeholder="DNI" />
+                    <button type="button" class="lock-button" data-lock-target="customerDni">Confirmar</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="panel-section" aria-labelledby="managementTitle">
+        <div class="section-title">
+            <h2 id="managementTitle">Gestiones</h2>
+            <span id="managementCount">0 cargadas</span>
+        </div>
+
+        <fieldset id="managementTypeOptions" class="option-group">
+            <legend>Tipo de gestión</legend>
+            <label class="radio-chip">
+                <input type="radio" name="managementType" value="RT" checked />
+                <span>RT</span>
+            </label>
+            <label class="radio-chip">
+                <input type="radio" name="managementType" value="RA" />
+                <span>RA</span>
+            </label>
+            <label class="radio-chip">
+                <input type="radio" name="managementType" value="ST" />
+                <span>ST</span>
+            </label>
+            <label class="radio-chip">
+                <input type="radio" name="managementType" value="SU" />
+                <span>SU</span>
+            </label>
+            <label class="radio-chip">
+                <input type="radio" name="managementType" value="RVT" />
+                <span>Reagenda de VT</span>
+            </label>
+        </fieldset>
+
+        <div id="rtOptions" class="rt-options">
+            <fieldset class="option-group">
+                <legend>Solución online</legend>
+                <label class="radio-chip">
+                    <input type="radio" name="onlineSolution" value="yes" checked />
+                    <span>Sí</span>
+                </label>
+                <label class="radio-chip">
+                    <input type="radio" name="onlineSolution" value="no" />
+                    <span>No</span>
+                </label>
+            </fieldset>
+
+            <fieldset id="rtNoOptions" class="option-group">
+                <legend>Resultado sin solución online</legend>
+                <label class="radio-chip">
+                    <input type="radio" name="rtNoResult" value="ticket" checked />
+                    <span>Ticket</span>
+                </label>
+                <label class="radio-chip">
+                    <input type="radio" name="rtNoResult" value="visit" />
+                    <span>Visita técnica</span>
+                </label>
+                <label class="radio-chip">
+                    <input type="radio" name="rtNoResult" value="observation" />
+                    <span>Agrego observación</span>
+                </label>
+            </fieldset>
+        </div>
+
+        <div id="stOptions" class="rt-options is-hidden">
+            <fieldset class="option-group">
+                <legend>Envío de instalación</legend>
+                <label class="radio-chip">
+                    <input type="radio" name="installationShipment" value="yes" checked />
+                    <span>Con envío de instalación</span>
+                </label>
+                <label class="radio-chip">
+                    <input type="radio" name="installationShipment" value="no" />
+                    <span>Sin envío de instalación</span>
+                </label>
+            </fieldset>
+        </div>
+
+        <div class="management-actions">
+            <button type="button" id="saveManagementBtn" class="primary-button">Guardar gestión</button>
+            <button type="button" id="resetManagementBtn" class="text-button">Agregar otra gestión</button>
+        </div>
+
+        <ul id="managementList" class="management-list" aria-live="polite"></ul>
+    </section>
+
+    <footer class="footer-actions">
+        <button type="button" id="finishCallBtn" class="finish-button" disabled>Terminar llamada</button>
+        <button type="button" id="clearCallBtn" class="secondary-button">Limpiar</button>
+    </footer>
+
+    <div class="undo-actions">
+        <button type="button" id="undoLastCallBtn" class="undo-button" disabled>Deshacer última llamada</button>
+    </div>
+
+    <section class="panel-section notes-section" aria-labelledby="notesTitle">
+        <div class="section-title">
+            <h2 id="notesTitle">Notas</h2>
+            <button type="button" id="clearNotesBtn" class="text-button">Borrar notas</button>
+        </div>
+        <textarea id="callNotes" rows="7" placeholder="Bloc de notas a modo de borrador para el asesor."></textarea>
+    </section>
+    </div>
+
+    <p id="statusMessage" class="status-message" role="status" aria-live="polite"></p>
+</main>
+
+<script src="sidepanel.js"></script>
+</body>
+</html>

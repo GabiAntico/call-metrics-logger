@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Call Metrics Logger",
+  "version": "0.1.0",
+  "description": "Quickly register call outcomes from a browser side panel.",
+  "permissions": ["sidePanel", "storage"],
+  "host_permissions": ["https://wilzizghmkfaersiffmt.supabase.co/*"],
+  "action": {
+    "default_title": "Open Call Metrics Logger"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}
