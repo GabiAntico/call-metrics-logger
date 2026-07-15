@@ -1,5 +1,7 @@
 const totalCallsElement = document.getElementById('totalCalls');
 const technicalVisitsElement = document.getElementById('technicalVisits');
+const installationVisitsElement = document.getElementById('installationVisits');
+const rescheduledVisitsElement = document.getElementById('rescheduledVisits');
 const managementCountElement = document.getElementById('managementCount');
 const managementListElement = document.getElementById('managementList');
 const saveManagementBtn = document.getElementById('saveManagementBtn');
@@ -13,6 +15,8 @@ const authPanel = document.getElementById('authPanel');
 const appContent = document.getElementById('appContent');
 const sessionBar = document.getElementById('sessionBar');
 const sessionEmailElement = document.getElementById('sessionEmail');
+const sessionMenuBtn = document.getElementById('sessionMenuBtn');
+const sessionMenuPanel = document.getElementById('sessionMenuPanel');
 const loginForm = document.getElementById('loginForm');
 const loginEmailElement = document.getElementById('loginEmail');
 const loginPasswordElement = document.getElementById('loginPassword');
@@ -22,18 +26,26 @@ const statusMessage = document.getElementById('statusMessage');
 const rtOptions = document.getElementById('rtOptions');
 const rtNoOptions = document.getElementById('rtNoOptions');
 const stOptions = document.getElementById('stOptions');
+const onlineSolutionToggle = document.getElementById('onlineSolutionToggle');
+const installationShipmentToggle = document.getElementById('installationShipmentToggle');
 
 const fieldIds = ['customerName', 'clientNumber', 'customerDni'];
 const supabaseRestUrl = 'https://wilzizghmkfaersiffmt.supabase.co/rest/v1/';
 const supabaseAuthUrl = supabaseRestUrl.replace(/\/rest\/v1\/?$/, '/auth/v1');
 const supabasePublishableKey = 'sb_publishable_Oc5Ki4oGgLYbFbLqyRfn0A_d1G-KLG-';
 const authSessionKey = 'supabaseAuthSession';
+const localRetentionDays = 10;
+const authRefreshWindowSeconds = 5 * 60;
+const authKeepAliveIntervalMs = 4 * 60 * 1000;
 
 const currentCall = {
     managements: []
 };
 
 let authSession = null;
+let authRefreshPromise = null;
+let authKeepAliveTimer = null;
+let authExpiredSessionRedirected = false;
 
 function todayKey(date = new Date()) {
     const year = date.getFullYear();
@@ -70,6 +82,16 @@ async function storageSet(values) {
     });
 }
 
+async function storageGetAll() {
+    if (globalThis.chrome?.storage?.local) {
+        return chrome.storage.local.get(null);
+    }
+
+    return Object.fromEntries(
+        Object.keys(localStorage).map((key) => [key, JSON.parse(localStorage.getItem(key))])
+    );
+}
+
 async function storageRemove(keys) {
     if (globalThis.chrome?.storage?.local) {
         return chrome.storage.local.remove(keys);
@@ -96,21 +118,84 @@ function draftNotesStorageKey() {
     return `advisorDraftNotes:${currentUserId()}`;
 }
 
+function normalizeDailyMetrics(metrics = {}) {
+    return {
+        totalCalls: metrics.totalCalls ?? 0,
+        technicalVisits: metrics.technicalVisits ?? 0,
+        installationVisits: metrics.installationVisits ?? 0,
+        rescheduledVisits: metrics.rescheduledVisits ?? 0
+    };
+}
+
+function dateKeyToLocalDate(dateKey) {
+    const [year, month, day] = dateKey.split('-').map(Number);
+
+    if (!year || !month || !day) {
+        return null;
+    }
+
+    return new Date(year, month - 1, day);
+}
+
+function isLocalRecordKeyOlderThanRetention(key) {
+    const pattern = new RegExp(`^(calls|metrics):${currentUserId()}:(\\d{4}-\\d{2}-\\d{2})$`);
+    const match = key.match(pattern);
+
+    if (!match) {
+        return false;
+    }
+
+    const recordDate = dateKeyToLocalDate(match[2]);
+
+    if (!recordDate) {
+        return false;
+    }
+
+    const cutoffDate = dateKeyToLocalDate(todayKey());
+    cutoffDate.setDate(cutoffDate.getDate() - localRetentionDays);
+
+    return recordDate < cutoffDate;
+}
+
+async function cleanupOldLocalRecords() {
+    if (!authSession?.user?.id) {
+        return;
+    }
+
+    const storedValues = await storageGetAll();
+    const keysToRemove = Object.keys(storedValues).filter(isLocalRecordKeyOlderThanRetention);
+
+    if (keysToRemove.length > 0) {
+        await storageRemove(keysToRemove);
+    }
+}
+
 async function getTodayMetrics() {
     const key = metricsStorageKey();
     const result = await storageGet(key);
+    const storedMetrics = result[key];
+    const metrics = normalizeDailyMetrics(storedMetrics);
 
-    return (
-        result[key] ?? {
-            totalCalls: 0,
-            technicalVisits: 0
-        }
-    );
+    if (storedMetrics?.installationVisits === undefined || storedMetrics?.rescheduledVisits === undefined) {
+        const todayCalls = await getTodayCalls();
+
+        return todayCalls.reduce((accumulator, callRecord) => {
+            const totals = getCallVisitTotals(callRecord);
+
+            return {
+                ...accumulator,
+                installationVisits: accumulator.installationVisits + totals.installationVisits,
+                rescheduledVisits: accumulator.rescheduledVisits + totals.rescheduledVisits
+            };
+        }, metrics);
+    }
+
+    return metrics;
 }
 
 async function saveTodayMetrics(metrics) {
     await storageSet({
-        [metricsStorageKey()]: metrics
+        [metricsStorageKey()]: normalizeDailyMetrics(metrics)
     });
 }
 
@@ -167,16 +252,53 @@ async function supabaseAuthRequest(path, options = {}) {
     const payload = await response.json().catch(() => ({}));
 
     if (!response.ok) {
-        throw new Error(
+        const error = new Error(
             payload.msg ??
             payload.message ??
             payload.error_description ??
             payload.error ??
             'No se pudo completar la autenticación.'
         );
+
+        error.status = response.status;
+        error.payload = payload;
+        throw error;
     }
 
     return payload;
+}
+
+function createAuthExpiredError() {
+    const error = new Error('Tu sesión venció. Iniciá sesión nuevamente.');
+    error.isAuthExpired = true;
+    return error;
+}
+
+function isAuthExpiredError(error) {
+    const payload = error?.payload ?? {};
+    const authText = [
+        error?.message,
+        payload.msg,
+        payload.message,
+        payload.error_description,
+        payload.error,
+        payload.code
+    ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+    return (
+        error?.isAuthExpired === true ||
+        error?.status === 401 ||
+        authText.includes('refresh token') ||
+        authText.includes('invalid refresh') ||
+        authText.includes('invalid_grant') ||
+        authText.includes('jwt expired') ||
+        authText.includes('invalid jwt') ||
+        authText.includes('token has expired') ||
+        authText.includes('session not found')
+    );
 }
 
 function normalizeSession(session) {
@@ -196,12 +318,14 @@ async function saveAuthSession(session) {
     await storageSet({
         [authSessionKey]: authSession
     });
+
+    return authSession;
 }
 
 function sessionNeedsRefresh(session) {
     const now = Math.floor(Date.now() / 1000);
 
-    return !session?.expires_at || session.expires_at - now < 60;
+    return !session?.expires_at || session.expires_at - now < authRefreshWindowSeconds;
 }
 
 async function refreshAuthSession() {
@@ -209,14 +333,30 @@ async function refreshAuthSession() {
         throw new Error('No hay sesión guardada.');
     }
 
-    const refreshedSession = await supabaseAuthRequest('token?grant_type=refresh_token', {
+    if (authRefreshPromise) {
+        return authRefreshPromise;
+    }
+
+    const refreshToken = authSession.refresh_token;
+
+    authRefreshPromise = supabaseAuthRequest('token?grant_type=refresh_token', {
         method: 'POST',
         body: {
-            refresh_token: authSession.refresh_token
+            refresh_token: refreshToken
         }
-    });
+    })
+        .then((session) => {
+            if (authSession?.refresh_token !== refreshToken) {
+                return authSession;
+            }
 
-    await saveAuthSession(refreshedSession);
+            return saveAuthSession(session);
+        })
+        .finally(() => {
+            authRefreshPromise = null;
+        });
+
+    return authRefreshPromise;
 }
 
 async function ensureAuthSession() {
@@ -225,10 +365,68 @@ async function ensureAuthSession() {
     }
 
     if (sessionNeedsRefresh(authSession)) {
-        await refreshAuthSession();
+        try {
+            await refreshAuthSession();
+        } catch (error) {
+            if (isAuthExpiredError(error)) {
+                await expireAuthSession();
+                throw createAuthExpiredError();
+            }
+
+            throw new Error(
+                'No se pudo renovar la sesión automáticamente. Revisá tu conexión e intentá de nuevo.'
+            );
+        }
     }
 
     return authSession;
+}
+
+async function refreshAuthSessionIfNeeded() {
+    if (!authSession?.refresh_token || !sessionNeedsRefresh(authSession)) {
+        return;
+    }
+
+    try {
+        await refreshAuthSession();
+    } catch (error) {
+        if (isAuthExpiredError(error)) {
+            await expireAuthSession();
+            return;
+        }
+
+        // La siguiente acción del usuario reintenta y muestra el error real si el refresh token ya no sirve.
+    }
+}
+
+function stopAuthKeepAlive() {
+    if (authKeepAliveTimer) {
+        clearInterval(authKeepAliveTimer);
+        authKeepAliveTimer = null;
+    }
+}
+
+function startAuthKeepAlive() {
+    stopAuthKeepAlive();
+
+    if (!authSession?.refresh_token) {
+        return;
+    }
+
+    authKeepAliveTimer = setInterval(() => {
+        refreshAuthSessionIfNeeded();
+    }, authKeepAliveIntervalMs);
+}
+
+async function expireAuthSession() {
+    authExpiredSessionRedirected = true;
+    stopAuthKeepAlive();
+    setSessionMenuOpen(false);
+    authSession = null;
+    await storageRemove(authSessionKey);
+    clearCurrentCall();
+    await renderAuthState({ silent: true });
+    setStatus('Tu sesión venció. Iniciá sesión nuevamente.', 'error');
 }
 
 async function loadAuthSession() {
@@ -246,9 +444,34 @@ async function loadAuthSession() {
 
     try {
         await refreshAuthSession();
-    } catch {
-        authSession = null;
-        await storageRemove(authSessionKey);
+    } catch (error) {
+        if (isAuthExpiredError(error)) {
+            await expireAuthSession();
+            return;
+        }
+
+        // Conserva la sesión guardada para que la próxima acción pueda reintentar la renovación.
+    }
+}
+
+function setSessionMenuOpen(isOpen) {
+    sessionMenuPanel.classList.toggle('is-hidden', !isOpen);
+    sessionMenuBtn.setAttribute('aria-expanded', String(isOpen));
+}
+
+function toggleSessionMenu() {
+    setSessionMenuOpen(sessionMenuPanel.classList.contains('is-hidden'));
+}
+
+function closeSessionMenuFromOutside(event) {
+    if (!sessionBar.contains(event.target)) {
+        setSessionMenuOpen(false);
+    }
+}
+
+function closeSessionMenuWithEscape(event) {
+    if (event.key === 'Escape') {
+        setSessionMenuOpen(false);
     }
 }
 
@@ -261,9 +484,13 @@ async function renderAuthState(options = {}) {
     sessionEmailElement.textContent = authSession?.user?.email ?? '';
 
     if (!isAuthenticated) {
+        stopAuthKeepAlive();
+        setSessionMenuOpen(false);
         callNotesElement.value = '';
         totalCallsElement.textContent = '0';
         technicalVisitsElement.textContent = '0';
+        installationVisitsElement.textContent = '0';
+        rescheduledVisitsElement.textContent = '0';
         finishCallBtn.disabled = true;
         undoLastCallBtn.disabled = true;
 
@@ -274,9 +501,12 @@ async function renderAuthState(options = {}) {
         return;
     }
 
+    startAuthKeepAlive();
+    await cleanupOldLocalRecords();
     await renderMetrics();
     await loadDraftNotes();
     await renderUndoState();
+    updateSegmentedIndicators();
 
     if (!options.silent) {
         setStatus('Sesión iniciada.', 'success');
@@ -312,12 +542,22 @@ async function supabaseRestRequest(path, options = {}) {
     }
 
     if (!response.ok) {
-        throw new Error(
+        const error = new Error(
             payload?.message ??
             payload?.details ??
             payload?.hint ??
             'No se pudo guardar el registro en Supabase.'
         );
+
+        error.status = response.status;
+        error.payload = payload;
+
+        if (isAuthExpiredError(error)) {
+            await expireAuthSession();
+            throw createAuthExpiredError();
+        }
+
+        throw error;
     }
 
     return payload;
@@ -341,6 +581,45 @@ function setStatus(message, type = 'default') {
     statusMessage.classList.toggle('is-error', type === 'error');
 }
 
+async function copyToClipboard(text) {
+    if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+    }
+
+    const helper = document.createElement('textarea');
+    helper.value = text;
+    helper.setAttribute('readonly', '');
+    helper.style.position = 'fixed';
+    helper.style.top = '-999px';
+    document.body.append(helper);
+    helper.select();
+
+    const copied = document.execCommand('copy');
+    helper.remove();
+
+    if (!copied) {
+        throw new Error('No se pudo copiar el texto.');
+    }
+}
+
+async function copyFieldValue(targetId) {
+    const field = document.getElementById(targetId);
+    const value = field?.value ?? '';
+
+    if (value.length === 0) {
+        setStatus('No hay texto para copiar.', 'error');
+        return;
+    }
+
+    try {
+        await copyToClipboard(value);
+        setStatus('Copiado al portapapeles.', 'success');
+    } catch (error) {
+        setStatus(error.message, 'error');
+    }
+}
+
 function getCustomerData() {
     return {
         name: document.getElementById('customerName').value.trim(),
@@ -353,7 +632,7 @@ function getManagementFromForm() {
     const type = selectedValue('managementType');
 
     if (type === 'ST') {
-        const withInstallationShipment = selectedValue('installationShipment') === 'yes';
+        const withInstallationShipment = installationShipmentToggle.checked;
 
         return {
             id: createId(),
@@ -376,7 +655,7 @@ function getManagementFromForm() {
         };
     }
 
-    const solutionOnline = selectedValue('onlineSolution') === 'yes';
+    const solutionOnline = onlineSolutionToggle.checked;
     const result = solutionOnline ? 'online' : selectedValue('rtNoResult');
 
     return {
@@ -386,6 +665,55 @@ function getManagementFromForm() {
         result,
         technicalVisits: result === 'visit' ? 1 : 0,
         createdAt: new Date().toISOString()
+    };
+}
+
+function countTechnicalVisitTypes(managements) {
+    const counts = managements.reduce(
+        (accumulator, management) => {
+            if (management.type === 'RT' && management.result === 'visit') {
+                accumulator.regularVisitCount += 1;
+            }
+
+            if (management.type === 'ST' && management.result === 'installation_shipment') {
+                accumulator.installationVisitCount += 1;
+            }
+
+            if (management.type === 'RVT') {
+                accumulator.rescheduledVisitCount += 1;
+            }
+
+            return accumulator;
+        },
+        {
+            regularVisitCount: 0,
+            installationVisitCount: 0,
+            rescheduledVisitCount: 0
+        }
+    );
+
+    return {
+        ...counts,
+        technicalVisitCount:
+            counts.regularVisitCount + counts.installationVisitCount + counts.rescheduledVisitCount
+    };
+}
+
+function getCallVisitTotals(callRecord) {
+    if (Array.isArray(callRecord.managements)) {
+        const counts = countTechnicalVisitTypes(callRecord.managements);
+
+        return {
+            technicalVisits: counts.technicalVisitCount,
+            installationVisits: counts.installationVisitCount,
+            rescheduledVisits: counts.rescheduledVisitCount
+        };
+    }
+
+    return {
+        technicalVisits: callRecord.totals?.technicalVisits ?? 0,
+        installationVisits: callRecord.totals?.installationVisits ?? 0,
+        rescheduledVisits: callRecord.totals?.rescheduledVisits ?? 0
     };
 }
 
@@ -503,11 +831,35 @@ function renderManagementList() {
 function renderDependentOptions() {
     const isRt = selectedValue('managementType') === 'RT';
     const isSt = selectedValue('managementType') === 'ST';
-    const isOnlineSolution = selectedValue('onlineSolution') === 'yes';
+    const isOnlineSolution = onlineSolutionToggle.checked;
 
     rtOptions.classList.toggle('is-hidden', !isRt);
     rtNoOptions.classList.toggle('is-hidden', !isRt || isOnlineSolution);
     stOptions.classList.toggle('is-hidden', !isSt);
+    updateSegmentedIndicators();
+}
+
+function updateSegmentedIndicator(group) {
+    const checkedInput = group.querySelector('input:checked');
+    const activeOption = checkedInput?.closest('.radio-chip');
+
+    if (!activeOption || group.offsetParent === null) {
+        group.style.setProperty('--segment-opacity', '0');
+        return;
+    }
+
+    const groupRect = group.getBoundingClientRect();
+    const activeRect = activeOption.getBoundingClientRect();
+
+    group.style.setProperty('--segment-x', `${activeRect.left - groupRect.left}px`);
+    group.style.setProperty('--segment-y', `${activeRect.top - groupRect.top}px`);
+    group.style.setProperty('--segment-width', `${activeRect.width}px`);
+    group.style.setProperty('--segment-height', `${activeRect.height}px`);
+    group.style.setProperty('--segment-opacity', '1');
+}
+
+function updateSegmentedIndicators() {
+    document.querySelectorAll('.segmented-options').forEach(updateSegmentedIndicator);
 }
 
 async function renderMetrics() {
@@ -515,13 +867,15 @@ async function renderMetrics() {
 
     totalCallsElement.textContent = metrics.totalCalls;
     technicalVisitsElement.textContent = metrics.technicalVisits;
+    installationVisitsElement.textContent = metrics.installationVisits;
+    rescheduledVisitsElement.textContent = metrics.rescheduledVisits;
 }
 
 function resetManagementForm() {
     setSelectedValue('managementType', 'RT');
-    setSelectedValue('onlineSolution', 'yes');
+    onlineSolutionToggle.checked = true;
     setSelectedValue('rtNoResult', 'ticket');
-    setSelectedValue('installationShipment', 'yes');
+    installationShipmentToggle.checked = true;
     renderDependentOptions();
 }
 
@@ -549,23 +903,23 @@ function clearCurrentCall() {
 
 function buildSupabaseCallRecord(callRecord) {
     const managements = callRecord.managements;
-    const isRescheduled = managements.some((management) => management.type === 'RVT');
-    const isInstallation = managements.some(
-        (management) => management.type === 'ST' && management.result === 'installation_shipment'
-    );
-    const isTechnicalVisit = callRecord.totals.technicalVisits > 0 || isRescheduled || isInstallation;
-    const notes =
-        callRecord.totals.technicalVisits > 1
-            ? `Visitas técnicas cargadas en la llamada: ${callRecord.totals.technicalVisits}.`
-            : null;
-
+    const {
+        technicalVisitCount,
+        regularVisitCount,
+        installationVisitCount,
+        rescheduledVisitCount
+    } = countTechnicalVisitTypes(managements);
     return {
         user_id: authSession.user.id,
         work_date: callRecord.date,
-        is_technical_visit: isTechnicalVisit,
-        is_rescheduled: isRescheduled,
-        is_installation: isInstallation,
-        notes
+        is_technical_visit: technicalVisitCount > 0,
+        is_rescheduled: rescheduledVisitCount > 0,
+        is_installation: installationVisitCount > 0,
+        technical_visit_count: technicalVisitCount,
+        regular_visit_count: regularVisitCount,
+        installation_visit_count: installationVisitCount,
+        rescheduled_visit_count: rescheduledVisitCount,
+        notes: null
     };
 }
 
@@ -614,10 +968,8 @@ async function finishCall() {
     finishCallBtn.disabled = true;
     finishCallBtn.textContent = 'Guardando...';
 
-    const visitCount = currentCall.managements.reduce(
-        (total, management) => total + management.technicalVisits,
-        0
-    );
+    const visitCounts = countTechnicalVisitTypes(currentCall.managements);
+    const visitCount = visitCounts.technicalVisitCount;
     const metrics = await getTodayMetrics();
     const callRecord = {
         id: createId(),
@@ -630,7 +982,10 @@ async function finishCall() {
         customer: getCustomerData(),
         managements: currentCall.managements.map((management) => ({ ...management })),
         totals: {
-            technicalVisits: visitCount
+            technicalVisits: visitCount,
+            regularVisits: visitCounts.regularVisitCount,
+            installationVisits: visitCounts.installationVisitCount,
+            rescheduledVisits: visitCounts.rescheduledVisitCount
         },
         syncStatus: 'pending'
     };
@@ -647,16 +1002,21 @@ async function finishCall() {
         await saveCompletedCall(syncedCallRecord);
         await saveTodayMetrics({
             totalCalls: metrics.totalCalls + 1,
-            technicalVisits: metrics.technicalVisits + visitCount
+            technicalVisits: metrics.technicalVisits + visitCount,
+            installationVisits: metrics.installationVisits + visitCounts.installationVisitCount,
+            rescheduledVisits: metrics.rescheduledVisits + visitCounts.rescheduledVisitCount
         });
 
         clearCurrentCall();
         await renderMetrics();
         await renderUndoState();
-        setStatus(`Llamada guardada en Supabase. Visitas técnicas sumadas: ${visitCount}.`, 'success');
+        setStatus(`Llamada guardada. Visitas técnicas sumadas: ${visitCount}.`, 'success');
     } catch (error) {
         renderManagementList();
-        setStatus(`No se pudo guardar en Supabase: ${error.message}`, 'error');
+        setStatus(
+            error.isAuthExpired ? error.message : `No se pudo guardar en Supabase: ${error.message}`,
+            'error'
+        );
     } finally {
         finishCallBtn.textContent = 'Terminar llamada';
     }
@@ -685,11 +1045,13 @@ async function undoLastCall() {
         await saveTodayCalls(todayCalls.slice(0, -1));
 
         const metrics = await getTodayMetrics();
-        const visitsToRemove = lastCall.totals?.technicalVisits ?? 0;
+        const visitsToRemove = getCallVisitTotals(lastCall);
 
         await saveTodayMetrics({
             totalCalls: Math.max(0, metrics.totalCalls - 1),
-            technicalVisits: Math.max(0, metrics.technicalVisits - visitsToRemove)
+            technicalVisits: Math.max(0, metrics.technicalVisits - visitsToRemove.technicalVisits),
+            installationVisits: Math.max(0, metrics.installationVisits - visitsToRemove.installationVisits),
+            rescheduledVisits: Math.max(0, metrics.rescheduledVisits - visitsToRemove.rescheduledVisits)
         });
 
         await renderMetrics();
@@ -697,7 +1059,10 @@ async function undoLastCall() {
         setStatus('Última llamada deshecha.', 'success');
     } catch (error) {
         await renderUndoState();
-        setStatus(`No se pudo deshacer la última llamada: ${error.message}`, 'error');
+        setStatus(
+            error.isAuthExpired ? error.message : `No se pudo deshacer la última llamada: ${error.message}`,
+            'error'
+        );
     } finally {
         undoLastCallBtn.textContent = 'Deshacer última llamada';
     }
@@ -726,6 +1091,7 @@ async function handleLogin(event) {
             }
         });
 
+        authExpiredSessionRedirected = false;
         await saveAuthSession(session);
         loginPasswordElement.value = '';
         clearCurrentCall();
@@ -739,6 +1105,10 @@ async function handleLogin(event) {
 }
 
 async function handleLogout() {
+    authExpiredSessionRedirected = false;
+    stopAuthKeepAlive();
+    setSessionMenuOpen(false);
+
     if (authSession?.access_token) {
         supabaseAuthRequest('logout', {
             method: 'POST',
@@ -768,9 +1138,25 @@ document.querySelectorAll('.lock-button').forEach((button) => {
     });
 });
 
-document.querySelectorAll('input[name="managementType"], input[name="onlineSolution"]').forEach((input) => {
-    input.addEventListener('change', renderDependentOptions);
+document.querySelectorAll('.copy-button').forEach((button) => {
+    button.addEventListener('click', () => {
+        copyFieldValue(button.dataset.copyTarget);
+    });
 });
+
+document.querySelectorAll('input[name="managementType"]').forEach((input) => {
+    input.addEventListener('change', () => {
+        renderDependentOptions();
+        updateSegmentedIndicators();
+    });
+});
+
+document.querySelectorAll('#rtNoOptions input').forEach((input) => {
+    input.addEventListener('change', updateSegmentedIndicators);
+});
+
+onlineSolutionToggle.addEventListener('change', renderDependentOptions);
+window.addEventListener('resize', updateSegmentedIndicators);
 
 saveManagementBtn.addEventListener('click', () => {
     currentCall.managements.push(getManagementFromForm());
@@ -801,13 +1187,22 @@ clearNotesBtn.addEventListener('click', async () => {
 });
 
 loginForm.addEventListener('submit', handleLogin);
+sessionMenuBtn.addEventListener('click', toggleSessionMenu);
 logoutBtn.addEventListener('click', handleLogout);
+document.addEventListener('click', closeSessionMenuFromOutside);
+document.addEventListener('keydown', closeSessionMenuWithEscape);
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+        refreshAuthSessionIfNeeded();
+    }
+});
+window.addEventListener('focus', refreshAuthSessionIfNeeded);
 
 async function initialize() {
     renderDependentOptions();
     renderManagementList();
     await loadAuthSession();
-    await renderAuthState({ silent: Boolean(authSession) });
+    await renderAuthState({ silent: Boolean(authSession) || authExpiredSessionRedirected });
 }
 
 initialize();

@@ -25,19 +25,32 @@
         </form>
     </section>
 
-    <section id="sessionBar" class="session-bar is-hidden" aria-label="Sesión activa">
-        <div>
-            <span>Sesión</span>
+    <div id="sessionBar" class="session-menu is-hidden">
+        <button
+            type="button"
+            id="sessionMenuBtn"
+            class="session-menu-button"
+            aria-label="Abrir menu de sesion"
+            aria-expanded="false"
+            aria-controls="sessionMenuPanel"
+        >
+            <span></span>
+            <span></span>
+            <span></span>
+        </button>
+
+        <div id="sessionMenuPanel" class="session-menu-panel is-hidden" role="menu">
+            <span>Sesion iniciada</span>
             <strong id="sessionEmail"></strong>
+            <button type="button" id="logoutBtn" class="text-button" role="menuitem">Cerrar sesion</button>
         </div>
-        <button type="button" id="logoutBtn" class="text-button">Salir</button>
-    </section>
+    </div>
 
     <div id="appContent" class="app-content is-hidden">
     <header class="panel-header">
         <div>
             <p class="app-kicker">Call Metrics</p>
-            <h1>Registro de llamada</h1>
+            <h1>Registro</h1>
         </div>
         <dl class="daily-totals" aria-label="Métricas del día">
             <div>
@@ -47,6 +60,14 @@
             <div>
                 <dt>Visitas</dt>
                 <dd id="technicalVisits">0</dd>
+            </div>
+            <div>
+                <dt>Instalaciones</dt>
+                <dd id="installationVisits">0</dd>
+            </div>
+            <div>
+                <dt>Reagendas</dt>
+                <dd id="rescheduledVisits">0</dd>
             </div>
         </dl>
     </header>
@@ -58,8 +79,11 @@
 
         <div class="lock-field">
             <label for="customerName">Nombre y apellido</label>
-            <div class="input-action-row">
-                <input id="customerName" type="text" autocomplete="off" placeholder="Nombre y apellido del cliente" />
+            <div class="input-action-row has-copy">
+                <div class="input-copy-field">
+                    <input id="customerName" type="text" autocomplete="off" placeholder="Nombre y apellido del cliente" />
+                    <button type="button" class="copy-button copy-icon-button" data-copy-target="customerName" aria-label="Copiar nombre y apellido"></button>
+                </div>
                 <button type="button" class="lock-button" data-lock-target="customerName">Confirmar</button>
             </div>
         </div>
@@ -67,16 +91,22 @@
         <div class="two-column">
             <div class="lock-field">
                 <label for="clientNumber">Nro. cliente</label>
-                <div class="input-action-row compact">
-                    <input id="clientNumber" type="text" inputmode="numeric" autocomplete="off" placeholder="Nro. cliente" />
+                <div class="input-action-row compact has-copy">
+                    <div class="input-copy-field">
+                        <input id="clientNumber" type="text" inputmode="numeric" autocomplete="off" placeholder="Nro. cliente" />
+                        <button type="button" class="copy-button copy-icon-button" data-copy-target="clientNumber" aria-label="Copiar numero de cliente"></button>
+                    </div>
                     <button type="button" class="lock-button" data-lock-target="clientNumber">Confirmar</button>
                 </div>
             </div>
 
             <div class="lock-field">
                 <label for="customerDni">DNI</label>
-                <div class="input-action-row compact">
-                    <input id="customerDni" type="text" inputmode="numeric" autocomplete="off" placeholder="DNI" />
+                <div class="input-action-row compact has-copy">
+                    <div class="input-copy-field">
+                        <input id="customerDni" type="text" inputmode="numeric" autocomplete="off" placeholder="DNI" />
+                        <button type="button" class="copy-button copy-icon-button" data-copy-target="customerDni" aria-label="Copiar DNI"></button>
+                    </div>
                     <button type="button" class="lock-button" data-lock-target="customerDni">Confirmar</button>
                 </div>
             </div>
@@ -89,8 +119,9 @@
             <span id="managementCount">0 cargadas</span>
         </div>
 
-        <fieldset id="managementTypeOptions" class="option-group">
+        <fieldset id="managementTypeOptions" class="segmented-field">
             <legend>Tipo de gestión</legend>
+            <div class="segmented-options">
             <label class="radio-chip">
                 <input type="radio" name="managementType" value="RT" checked />
                 <span>RT</span>
@@ -111,23 +142,25 @@
                 <input type="radio" name="managementType" value="RVT" />
                 <span>Reagenda de VT</span>
             </label>
+            </div>
         </fieldset>
 
         <div id="rtOptions" class="rt-options">
-            <fieldset class="option-group">
-                <legend>Solución online</legend>
-                <label class="radio-chip">
-                    <input type="radio" name="onlineSolution" value="yes" checked />
-                    <span>Sí</span>
+            <div class="switch-field">
+                <span id="onlineSolutionLabel" class="switch-title">Solución online</span>
+                <label class="binary-switch">
+                    <input id="onlineSolutionToggle" type="checkbox" aria-labelledby="onlineSolutionLabel" checked />
+                    <span class="switch-track" aria-hidden="true">
+                        <span>Sí</span>
+                        <span>No</span>
+                        <span class="switch-thumb"></span>
+                    </span>
                 </label>
-                <label class="radio-chip">
-                    <input type="radio" name="onlineSolution" value="no" />
-                    <span>No</span>
-                </label>
-            </fieldset>
+            </div>
 
-            <fieldset id="rtNoOptions" class="option-group">
+            <fieldset id="rtNoOptions" class="segmented-field">
                 <legend>Resultado sin solución online</legend>
+                <div class="segmented-options">
                 <label class="radio-chip">
                     <input type="radio" name="rtNoResult" value="ticket" checked />
                     <span>Ticket</span>
@@ -140,26 +173,27 @@
                     <input type="radio" name="rtNoResult" value="observation" />
                     <span>Agrego observación</span>
                 </label>
+                </div>
             </fieldset>
         </div>
 
         <div id="stOptions" class="rt-options is-hidden">
-            <fieldset class="option-group">
-                <legend>Envío de instalación</legend>
-                <label class="radio-chip">
-                    <input type="radio" name="installationShipment" value="yes" checked />
-                    <span>Con envío de instalación</span>
+            <div class="switch-field">
+                <span id="installationShipmentLabel" class="switch-title">Envío de instalación</span>
+                <label class="binary-switch">
+                    <input id="installationShipmentToggle" type="checkbox" aria-labelledby="installationShipmentLabel" checked />
+                    <span class="switch-track" aria-hidden="true">
+                        <span>Con envío</span>
+                        <span>Sin envío</span>
+                        <span class="switch-thumb"></span>
+                    </span>
                 </label>
-                <label class="radio-chip">
-                    <input type="radio" name="installationShipment" value="no" />
-                    <span>Sin envío de instalación</span>
-                </label>
-            </fieldset>
+            </div>
         </div>
 
         <div class="management-actions">
             <button type="button" id="saveManagementBtn" class="primary-button">Guardar gestión</button>
-            <button type="button" id="resetManagementBtn" class="text-button">Agregar otra gestión</button>
+            <button type="button" id="resetManagementBtn" class="text-button">Limpiar</button>
         </div>
 
         <ul id="managementList" class="management-list" aria-live="polite"></ul>
@@ -177,7 +211,10 @@
     <section class="panel-section notes-section" aria-labelledby="notesTitle">
         <div class="section-title">
             <h2 id="notesTitle">Notas</h2>
-            <button type="button" id="clearNotesBtn" class="text-button">Borrar notas</button>
+            <div class="section-actions">
+                <button type="button" class="copy-button copy-icon-button copy-inline-button" data-copy-target="callNotes" aria-label="Copiar notas"></button>
+                <button type="button" id="clearNotesBtn" class="text-button">Borrar notas</button>
+            </div>
         </div>
         <textarea id="callNotes" rows="7" placeholder="Bloc de notas a modo de borrador para el asesor."></textarea>
     </section>
