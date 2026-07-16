@@ -463,6 +463,12 @@ input:disabled {
     color: var(--text);
 }
 
+.radio-chip.is-disabled,
+.radio-chip:has(input:disabled) {
+    cursor: not-allowed;
+    opacity: 0.48;
+}
+
 .segmented-options {
     position: relative;
     display: grid;
@@ -473,6 +479,10 @@ input:disabled {
     --segment-width: 0px;
     --segment-height: 0px;
     --segment-opacity: 0;
+}
+
+.transfer-area-options {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .segmented-options::before {
@@ -572,7 +582,6 @@ input:disabled {
     box-shadow: 0 0 0 2px rgba(61, 165, 255, 0.2);
 }
 
-#managementTypeOptions .radio-chip:last-child,
 #rtNoOptions .radio-chip:last-child,
 #stOptions .radio-chip {
     grid-column: 1 / -1;

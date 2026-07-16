@@ -26,10 +26,18 @@ const statusMessage = document.getElementById('statusMessage');
 const rtOptions = document.getElementById('rtOptions');
 const rtNoOptions = document.getElementById('rtNoOptions');
 const stOptions = document.getElementById('stOptions');
+const transferOptions = document.getElementById('transferOptions');
 const onlineSolutionToggle = document.getElementById('onlineSolutionToggle');
 const installationShipmentToggle = document.getElementById('installationShipmentToggle');
 
 const fieldIds = ['customerName', 'clientNumber', 'customerDni'];
+const transferAreaLabels = {
+    commercial: 'Comercial',
+    retention: 'Retención',
+    other: 'Otra'
+};
+const extensionManifest = globalThis.chrome?.runtime?.getManifest?.();
+const extensionVersion = extensionManifest?.version ?? '0.3.0';
 const supabaseRestUrl = 'https://wilzizghmkfaersiffmt.supabase.co/rest/v1/';
 const supabaseAuthUrl = supabaseRestUrl.replace(/\/rest\/v1\/?$/, '/auth/v1');
 const supabasePublishableKey = 'sb_publishable_Oc5Ki4oGgLYbFbLqyRfn0A_d1G-KLG-';
@@ -46,6 +54,9 @@ let authSession = null;
 let authRefreshPromise = null;
 let authKeepAliveTimer = null;
 let authExpiredSessionRedirected = false;
+let extensionConfig = null;
+let extensionConfigPromise = null;
+let extensionVersionSupported = true;
 
 function todayKey(date = new Date()) {
     const year = date.getFullYear();
@@ -502,13 +513,29 @@ async function renderAuthState(options = {}) {
     }
 
     startAuthKeepAlive();
+    let versionValidationError = null;
+
+    try {
+        await ensureSupportedExtensionVersion({ force: true });
+    } catch (error) {
+        versionValidationError = error;
+
+        if (error.isUnsupportedVersion) {
+            extensionVersionSupported = false;
+            updateExtensionVersionControls();
+        }
+    }
+
     await cleanupOldLocalRecords();
     await renderMetrics();
     await loadDraftNotes();
     await renderUndoState();
+    updateExtensionVersionControls();
     updateSegmentedIndicators();
 
-    if (!options.silent) {
+    if (versionValidationError) {
+        setStatus(versionValidationError.message, 'error');
+    } else if (!options.silent) {
         setStatus('Sesión iniciada.', 'success');
     }
 }
@@ -561,6 +588,83 @@ async function supabaseRestRequest(path, options = {}) {
     }
 
     return payload;
+}
+
+function compareVersions(versionA, versionB) {
+    const partsA = String(versionA).split('.').map((part) => Number.parseInt(part, 10) || 0);
+    const partsB = String(versionB).split('.').map((part) => Number.parseInt(part, 10) || 0);
+    const length = Math.max(partsA.length, partsB.length);
+
+    for (let index = 0; index < length; index += 1) {
+        const valueA = partsA[index] ?? 0;
+        const valueB = partsB[index] ?? 0;
+
+        if (valueA !== valueB) {
+            return valueA > valueB ? 1 : -1;
+        }
+    }
+
+    return 0;
+}
+
+function createUnsupportedVersionError(config) {
+    const error = new Error(
+        config?.force_update_message ??
+        'Hay una nueva versión de Call Metrics. Actualizá la extensión para continuar.'
+    );
+    error.isUnsupportedVersion = true;
+    return error;
+}
+
+function updateExtensionVersionControls() {
+    const isBlocked = !extensionVersionSupported;
+
+    saveManagementBtn.disabled = isBlocked;
+    finishCallBtn.disabled = isBlocked || currentCall.managements.length === 0;
+
+    if (isBlocked) {
+        undoLastCallBtn.disabled = true;
+    }
+}
+
+async function loadExtensionConfig(options = {}) {
+    if (extensionConfig && !options.force) {
+        return extensionConfig;
+    }
+
+    if (extensionConfigPromise && !options.force) {
+        return extensionConfigPromise;
+    }
+
+    extensionConfigPromise = supabaseRestRequest(
+        'extension_config?select=min_supported_version,latest_version,force_update_message&id=eq.true&limit=1'
+    )
+        .then((rows) => {
+            extensionConfig = rows?.[0] ?? null;
+
+            if (!extensionConfig) {
+                throw new Error('No se pudo validar la versión de la extensión.');
+            }
+
+            return extensionConfig;
+        })
+        .finally(() => {
+            extensionConfigPromise = null;
+        });
+
+    return extensionConfigPromise;
+}
+
+async function ensureSupportedExtensionVersion(options = {}) {
+    const config = await loadExtensionConfig(options);
+    extensionVersionSupported = compareVersions(extensionVersion, config.min_supported_version) >= 0;
+    updateExtensionVersionControls();
+
+    if (!extensionVersionSupported) {
+        throw createUnsupportedVersionError(config);
+    }
+
+    return config;
 }
 
 function selectedValue(name) {
@@ -628,8 +732,27 @@ function getCustomerData() {
     };
 }
 
+function hasTransferManagement() {
+    return currentCall.managements.some((management) => management.type === 'TRANSFER');
+}
+
+function getTransferManagement(managements) {
+    return managements.find((management) => management.type === 'TRANSFER') ?? null;
+}
+
 function getManagementFromForm() {
     const type = selectedValue('managementType');
+
+    if (type === 'TRANSFER') {
+        return {
+            id: createId(),
+            type,
+            solutionOnline: null,
+            result: selectedValue('transferArea'),
+            technicalVisits: 0,
+            createdAt: new Date().toISOString()
+        };
+    }
 
     if (type === 'ST') {
         const withInstallationShipment = installationShipmentToggle.checked;
@@ -729,6 +852,10 @@ function managementTitle(management) {
             return 'Reagenda de VT';
         }
 
+        if (management.type === 'TRANSFER') {
+            return `Transferencia - ${transferAreaLabels[management.result] ?? 'Otra'}`;
+        }
+
         return management.type;
     }
 
@@ -751,7 +878,8 @@ function managementDetail(management) {
     const labels = {
         RA: 'Reclamo administrativo',
         SU: 'Sugerencia',
-        RVT: 'Reagenda de visita técnica. Suma una VT.'
+        RVT: 'Reagenda de visita técnica. Suma una VT.',
+        TRANSFER: 'Llamada derivada a otro sector. No suma visita técnica.'
     };
 
     if (management.type === 'ST') {
@@ -826,16 +954,39 @@ function renderManagementList() {
     const count = currentCall.managements.length;
     managementCountElement.textContent = `${count} ${count === 1 ? 'cargada' : 'cargadas'}`;
     finishCallBtn.disabled = count === 0;
+    updateTransferManagementOption();
+    updateExtensionVersionControls();
+}
+
+function updateTransferManagementOption() {
+    const transferInput = document.querySelector('input[name="managementType"][value="TRANSFER"]');
+    const hasTransfer = hasTransferManagement();
+
+    if (!transferInput) {
+        return;
+    }
+
+    if (hasTransfer && transferInput.checked) {
+        setSelectedValue('managementType', 'RT');
+    }
+
+    transferInput.disabled = hasTransfer;
+    transferInput.closest('.radio-chip')?.classList.toggle('is-disabled', hasTransfer);
 }
 
 function renderDependentOptions() {
-    const isRt = selectedValue('managementType') === 'RT';
-    const isSt = selectedValue('managementType') === 'ST';
+    updateTransferManagementOption();
+
+    const selectedManagementType = selectedValue('managementType');
+    const isRt = selectedManagementType === 'RT';
+    const isSt = selectedManagementType === 'ST';
+    const isTransfer = selectedManagementType === 'TRANSFER';
     const isOnlineSolution = onlineSolutionToggle.checked;
 
     rtOptions.classList.toggle('is-hidden', !isRt);
     rtNoOptions.classList.toggle('is-hidden', !isRt || isOnlineSolution);
     stOptions.classList.toggle('is-hidden', !isSt);
+    transferOptions.classList.toggle('is-hidden', !isTransfer);
     updateSegmentedIndicators();
 }
 
@@ -876,6 +1027,7 @@ function resetManagementForm() {
     onlineSolutionToggle.checked = true;
     setSelectedValue('rtNoResult', 'ticket');
     installationShipmentToggle.checked = true;
+    setSelectedValue('transferArea', 'commercial');
     renderDependentOptions();
 }
 
@@ -909,12 +1061,16 @@ function buildSupabaseCallRecord(callRecord) {
         installationVisitCount,
         rescheduledVisitCount
     } = countTechnicalVisitTypes(managements);
+    const transferManagement = getTransferManagement(managements);
+
     return {
         user_id: authSession.user.id,
         work_date: callRecord.date,
         is_technical_visit: technicalVisitCount > 0,
         is_rescheduled: rescheduledVisitCount > 0,
         is_installation: installationVisitCount > 0,
+        is_transferred: Boolean(transferManagement),
+        transfer_area: transferManagement?.result ?? null,
         technical_visit_count: technicalVisitCount,
         regular_visit_count: regularVisitCount,
         installation_visit_count: installationVisitCount,
@@ -957,6 +1113,18 @@ async function renderUndoState() {
 async function finishCall() {
     if (!authSession?.user?.id) {
         setStatus('Iniciá sesión antes de terminar la llamada.', 'error');
+        return;
+    }
+
+    try {
+        await ensureSupportedExtensionVersion({ force: true });
+    } catch (error) {
+        if (error.isUnsupportedVersion) {
+            extensionVersionSupported = false;
+            updateExtensionVersionControls();
+        }
+
+        setStatus(error.message, 'error');
         return;
     }
 
@@ -1025,6 +1193,18 @@ async function finishCall() {
 async function undoLastCall() {
     if (!authSession?.user?.id) {
         setStatus('Iniciá sesión para deshacer registros.', 'error');
+        return;
+    }
+
+    try {
+        await ensureSupportedExtensionVersion({ force: true });
+    } catch (error) {
+        if (error.isUnsupportedVersion) {
+            extensionVersionSupported = false;
+            updateExtensionVersionControls();
+        }
+
+        setStatus(error.message, 'error');
         return;
     }
 
@@ -1155,11 +1335,35 @@ document.querySelectorAll('#rtNoOptions input').forEach((input) => {
     input.addEventListener('change', updateSegmentedIndicators);
 });
 
+document.querySelectorAll('#transferOptions input').forEach((input) => {
+    input.addEventListener('change', updateSegmentedIndicators);
+});
+
 onlineSolutionToggle.addEventListener('change', renderDependentOptions);
 window.addEventListener('resize', updateSegmentedIndicators);
 
-saveManagementBtn.addEventListener('click', () => {
-    currentCall.managements.push(getManagementFromForm());
+saveManagementBtn.addEventListener('click', async () => {
+    try {
+        await ensureSupportedExtensionVersion({ force: true });
+    } catch (error) {
+        if (error.isUnsupportedVersion) {
+            extensionVersionSupported = false;
+            updateExtensionVersionControls();
+        }
+
+        setStatus(error.message, 'error');
+        return;
+    }
+
+    const management = getManagementFromForm();
+
+    if (management.type === 'TRANSFER' && hasTransferManagement()) {
+        setStatus('Ya cargaste una transferencia en esta llamada.', 'error');
+        renderDependentOptions();
+        return;
+    }
+
+    currentCall.managements.push(management);
     resetManagementForm();
     renderManagementList();
     setStatus('Gestión cargada.', 'success');

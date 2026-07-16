@@ -142,6 +142,10 @@
                 <input type="radio" name="managementType" value="RVT" />
                 <span>Reagenda de VT</span>
             </label>
+            <label class="radio-chip">
+                <input type="radio" name="managementType" value="TRANSFER" />
+                <span>Transferencia</span>
+            </label>
             </div>
         </fieldset>
 
@@ -190,6 +194,24 @@
                 </label>
             </div>
         </div>
+
+        <fieldset id="transferOptions" class="segmented-field is-hidden">
+            <legend>Área de transferencia</legend>
+            <div class="segmented-options transfer-area-options">
+            <label class="radio-chip">
+                <input type="radio" name="transferArea" value="commercial" checked />
+                <span>Comercial</span>
+            </label>
+            <label class="radio-chip">
+                <input type="radio" name="transferArea" value="retention" />
+                <span>Retención</span>
+            </label>
+            <label class="radio-chip">
+                <input type="radio" name="transferArea" value="other" />
+                <span>Otra</span>
+            </label>
+            </div>
+        </fieldset>
 
         <div class="management-actions">
             <button type="button" id="saveManagementBtn" class="primary-button">Guardar gestión</button>
